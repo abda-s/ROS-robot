@@ -42,10 +42,10 @@ public:
 };
 
 // Create four encoder instances with their respective pins (adjust pins as needed)
-Encoder encoder1(15, 2);
-Encoder encoder2(22, 23);
-Encoder encoder3(35, 34);
-Encoder encoder4(13, 12);
+Encoder encoder1(17, 16); //c1, c2
+Encoder encoder2(22, 23); //c1, c2
+Encoder encoder3(26, 27); //c1, c2
+Encoder encoder4(35, 34); //c1, c2
 
 void setup() {
   Serial.begin(9600);

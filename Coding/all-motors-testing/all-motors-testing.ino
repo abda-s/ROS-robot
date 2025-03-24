@@ -4,8 +4,8 @@
 *********/
 
 // Motor A (Motor 1)
-int motor1Pin1 = 27;
-int motor1Pin2 = 26;
+int motor1Pin1 = 13;
+int motor1Pin2 = 12;
 int enable1Pin = 14;
 
 // Motor B (Motor 2)
@@ -19,8 +19,8 @@ int motor3Pin2 = 19;
 int enable3Pin = 5;
 
 // Motor D (Motor 4)
-int motor4Pin1 = 17;
-int motor4Pin2 = 16;
+int motor4Pin1 = 2;
+int motor4Pin2 = 15;
 int enable4Pin = 4;
 
 // PWM properties
