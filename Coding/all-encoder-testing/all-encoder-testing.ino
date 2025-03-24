@@ -42,8 +42,11 @@ public:
 };
 
 // Create four encoder instances with their respective pins (adjust pins as needed)
+// yellow = c1
+// green = c2
+
 Encoder encoder1(17, 16); //c1, c2
-Encoder encoder2(22, 23); //c1, c2
+Encoder encoder2(39, 36); //c1, c2
 Encoder encoder3(26, 27); //c1, c2
 Encoder encoder4(35, 34); //c1, c2
 
