@@ -1,31 +1,36 @@
- #define outputA 15
- #define outputB 2
+#define outputA 17
+#define outputB 16
 
- int counter = 0; 
- int aState;
- int aLastState;  
+volatile int counter = 0; 
+volatile int aLastState;  
 
- void setup() { 
-   pinMode (outputA,INPUT);
-   pinMode (outputB,INPUT);
-   
-   Serial.begin (9600);
-   // Reads the initial state of the outputA
-   aLastState = digitalRead(outputA);   
- } 
+void IRAM_ATTR handleEncoder() {
+  int aState = digitalRead(outputA);
+  if (aState != aLastState) {
+    if (digitalRead(outputB) != aState) {
+      counter++;
+    } else {
+      counter--;
+    }
+  }
+  aLastState = aState;
+}
 
- void loop() { 
-   aState = digitalRead(outputA); // Reads the "current" state of the outputA
-   // If the previous and the current state of the outputA are different, that means a Pulse has occured
-   if (aState != aLastState){     
-     // If the outputB state is different to the outputA state, that means the encoder is rotating clockwise
-     if (digitalRead(outputB) != aState) { 
-       counter ++;
-     } else {
-       counter --;
-     }
-     Serial.print("Position: ");
-     Serial.println(counter);
-   } 
-   aLastState = aState; // Updates the previous state of the outputA with the current state
- }
+
+void setup() {
+  pinMode(outputA, INPUT);
+  pinMode(outputB, INPUT);
+  Serial.begin(9600);
+  aLastState = digitalRead(outputA);
+  attachInterrupt(digitalPinToInterrupt(outputA), handleEncoder, CHANGE);
+}
+
+void loop() {
+  static int lastCounter = 0; 
+  if (lastCounter != counter) {
+    Serial.print("Position: ");
+    Serial.println(counter);
+    lastCounter = counter;
+  }
+}
+
