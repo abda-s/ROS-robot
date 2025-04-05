@@ -2,68 +2,92 @@
 
 class Encoder {
 private:
-  int pinA;        // Pin connected to output A of the encoder
-  int pinB;        // Pin connected to output B of the encoder
-  int aState;      // Current state of output A
-  int aLastState;  // Previous state of output A
-  int counter;     // Tracks the encoder's position
+  uint8_t pinA_;
+  uint8_t pinB_;
+  volatile int counter_;
+  volatile int aLastState_;
 
 public:
-  // Constructor initializes pins and reads initial state
-  Encoder(int aPin, int bPin)
-    : pinA(aPin), pinB(bPin), counter(0) {
-    pinMode(pinA, INPUT);
-    pinMode(pinB, INPUT);
-    aLastState = digitalRead(pinA);
+  Encoder(uint8_t pinA, uint8_t pinB)
+    : pinA_(pinA), pinB_(pinB), counter_(0), aLastState_(0) {
+    pinMode(pinA_, INPUT_PULLUP);  // Or INPUT depending on your wiring
+    pinMode(pinB_, INPUT_PULLUP);
+    aLastState_ = digitalRead(pinA_);
   }
 
-  // Updates the encoder state and returns true if position changed
-  bool update() {
-    aState = digitalRead(pinA);
-    bool changed = false;
-
-    if (aState != aLastState) {
-      // Determine direction based on output B's state
-      if (digitalRead(pinB) != aState) {
-        counter++;
+  void update() {
+    int aState = digitalRead(pinA_);
+    if (aState != aLastState_) {
+      if (digitalRead(pinB_) != aState) {
+        counter_++;
       } else {
-        counter--;
+        counter_--;
       }
-      changed = true;
     }
-    aLastState = aState;
-    return changed;
+    aLastState_ = aState;
   }
 
-  // Returns the current position of the encoder
-  int getPosition() const {
-    return counter;
+  volatile int getCounter() const {
+    return counter_;
+  }
+
+  uint8_t getPinA() const {
+    return pinA_;
   }
 };
 
-// Create four encoder instances with their respective pins (adjust pins as needed)
-// yellow = c1
-// green = c2
+// Define 4 encoder objects
+Encoder encoder0(17, 16);
+Encoder encoder1(39, 36);
+Encoder encoder2(26, 27);
+Encoder encoder3(35, 34);
 
-Encoder encoder1(17, 16); //c1, c2
-Encoder encoder2(39, 36); //c1, c2
-Encoder encoder3(26, 27); //c1, c2
-Encoder encoder4(35, 34); //c1, c2
+// Individual ISR handlers for each encoder
+void IRAM_ATTR handleEncoder0() {
+  encoder0.update();
+}
+void IRAM_ATTR handleEncoder1() {
+  encoder1.update();
+}
+void IRAM_ATTR handleEncoder2() {
+  encoder2.update();
+}
+void IRAM_ATTR handleEncoder3() {
+  encoder3.update();
+}
 
 void setup() {
   Serial.begin(9600);
+
+  // Attach interrupts for each encoder
+  attachInterrupt(digitalPinToInterrupt(encoder0.getPinA()), handleEncoder0, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(encoder1.getPinA()), handleEncoder1, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(encoder2.getPinA()), handleEncoder2, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(encoder3.getPinA()), handleEncoder3, CHANGE);
 }
 
 void loop() {
-  // Check and update each encoder
-  Encoder* encoders[] = { &encoder1, &encoder2, &encoder3, &encoder4 };
+  static int lastCounters[4] = { 0, 0, 0, 0 };
+  int currentCounters[4];
 
+  // Read all counters atomically
+  noInterrupts();
+  currentCounters[0] = encoder0.getCounter();
+  currentCounters[1] = encoder1.getCounter();
+  currentCounters[2] = encoder2.getCounter();
+  currentCounters[3] = encoder3.getCounter();
+  interrupts();
+
+  // Check and print changes for each encoder
   for (int i = 0; i < 4; i++) {
-    if (encoders[i]->update()) {
+    if (currentCounters[i] != lastCounters[i]) {
       Serial.print("Encoder ");
-      Serial.print(i + 1);
-      Serial.print(" Position: ");
-        Serial.println(encoders[i]->getPosition());
+      Serial.print(i);
+      Serial.print(": ");
+      Serial.println(currentCounters[i]);
+      lastCounters[i] = currentCounters[i];
     }
   }
+
+  delay(10);  // Optional delay to reduce serial output
 }
