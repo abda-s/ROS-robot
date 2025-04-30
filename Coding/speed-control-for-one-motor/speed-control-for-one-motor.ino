@@ -1,158 +1,180 @@
 #include <Arduino.h>
 
-// --- Global Pin Definitions ---
-// Adjust these pin numbers to match your single motor's wiring
-const int MOTOR_PIN1 = 33;     // Motor control pin 1
-const int MOTOR_PIN2 = 25;     // Motor control pin 2
-const int MOTOR_ENABLE_PIN = 32; // Motor PWM/Enable pin
-const int PWM_CHANNEL = 0;     // ESP32 PWM channel (0-15)
-const int PWM_FREQ = 30000;    // PWM frequency (Hz)
-const int PWM_RESOLUTION = 8;  // PWM resolution (bits, 8 = 0-255)
+// --- Motor Pins ---
+const int MOTOR_PIN1 = 33;
+const int MOTOR_PIN2 = 25;
+const int MOTOR_ENABLE_PIN = 32;
+const int PWM_CHANNEL = 0;
+const int PWM_FREQ = 30000;
+const int PWM_RESOLUTION = 8;
 
-const uint8_t ENCODER_PINA = 39; // Encoder Channel A pin (usually attach interrupt to this)
-const uint8_t ENCODER_PINB = 36; // Encoder Channel B pin
+// --- Encoder Pins ---
+const uint8_t ENCODER_PINA = 39;
+const uint8_t ENCODER_PINB = 36;
 
-// --- Global State Variables ---
-volatile long g_encoder_count = 0; // Stores the encoder ticks
-volatile int g_a_last_state = 0;   // Stores the last state of Encoder Pin A
+// --- Encoder State (4× decoding) ---
+volatile long g_encoder_count = 0;
 
-int g_current_speed = 0;       // Current motor speed (0-255)
-int g_current_direction = 0;   // Current motor direction (1=forward, -1=backward, 0=stop)
+// --- PID Variables ---
+float KP = 0.5, KI = 0.55, KD = 0.0;
+float g_target_speed_rpm = 30.0;
+volatile float g_current_speed_rpm = 0.0;
+float e = 0.0, e_prev = 0.0;
+float inte = 0.0, inte_prev = 0.0;
+float V = 0.0;
+const float Vmax = 6.0, Vmin = -6.0;
 
-// --- ISR for Encoder (must be fast and simple) ---
-// Marked with IRAM_ATTR for ESP32 to run from RAM, improving reliability
-void IRAM_ATTR handleEncoder() {
-  // Read current state of Pin A
-  int a_state = digitalRead(ENCODER_PINA);
+unsigned long g_pid_last_time_ms = 0;
+long g_pid_last_encoder_count = 0;
 
-  // Check if Pin A state has changed
-  if (a_state != g_a_last_state) {
-    // If A and B are different, it's one direction; if same, it's the other.
-    // This logic depends on how your encoder is wired and its direction.
-    // You might need to swap +1 and -1 depending on your physical setup.
-    if (digitalRead(ENCODER_PINB) != a_state) {
-      g_encoder_count++; // Assume this is forward
-    } else {
-      g_encoder_count--; // Assume this is backward
-    }
-  }
-  // Update last state of Pin A for the next comparison
-  g_a_last_state = a_state;
+const int ENCODER_COUNTS_PER_REVOLUTION = 3960;
+
+// --- Timer Variables ---
+hw_timer_t *g_pid_timer = nullptr;
+volatile unsigned long g_pid_timer_count = 0;
+unsigned long g_pid_count_prev = 0;
+const unsigned long CONTROL_LOOP_PERIOD_MS = 20;
+const uint64_t TIMER_ALARM_VALUE = CONTROL_LOOP_PERIOD_MS * 1000;
+
+// --- ISR for Encoder A ---
+void IRAM_ATTR handleEncoderA() {
+  bool a = digitalRead(ENCODER_PINA);
+  bool b = digitalRead(ENCODER_PINB);
+  g_encoder_count += (a == b) ? +1 : -1;
 }
 
-// --- Motor Control Function ---
-// direction: 1 for forward, -1 for backward, 0 for stop
-// speed: 0-255 for PWM
-void controlMotor(int direction, int speed) {
-  // Ensure speed is within the valid range
-  speed = constrain(speed, 0, 255);
+// --- ISR for Encoder B ---
+void IRAM_ATTR handleEncoderB() {
+  bool a = digitalRead(ENCODER_PINA);
+  bool b = digitalRead(ENCODER_PINB);
+  g_encoder_count += (a != b) ? +1 : -1;
+}
 
-  // Set direction pins based on requested direction
-  if (direction == 1) { // Forward
+// --- PID Timer ISR ---
+void IRAM_ATTR onPidTimer() {
+  g_pid_timer_count++;
+}
+
+// --- Motor Control ---
+void controlMotorPWM(int direction, int speed_pwm) {
+  speed_pwm = constrain(speed_pwm, 0, 255);
+  if (direction > 0) {
     digitalWrite(MOTOR_PIN1, LOW);
     digitalWrite(MOTOR_PIN2, HIGH);
-  } else if (direction == -1) { // Backward
+  } else if (direction < 0) {
     digitalWrite(MOTOR_PIN1, HIGH);
     digitalWrite(MOTOR_PIN2, LOW);
-  } else { // Stop
+  } else {
     digitalWrite(MOTOR_PIN1, LOW);
     digitalWrite(MOTOR_PIN2, LOW);
-    speed = 0; // Speed should be 0 when stopped
+    speed_pwm = 0;
   }
-
-  // Set the PWM speed
-  ledcWrite(MOTOR_ENABLE_PIN, speed);
-
-  // Update global state tracking (optional for this simple demo)
-  g_current_speed = speed;
-  g_current_direction = direction;
+  ledcWrite(MOTOR_ENABLE_PIN, speed_pwm);
 }
 
-// --- Function to Get Encoder Count Safely ---
+// --- Safe Encoder Count Access ---
 long getEncoderCount() {
-  noInterrupts(); // Disable interrupts temporarily
-  long count = g_encoder_count; // Read the volatile global variable
-  interrupts();   // Re-enable interrupts
-  return count;
-}
-
-// --- Function to Reset Encoder Count Safely ---
-void resetEncoder() {
   noInterrupts();
-  g_encoder_count = 0;
+  long c = g_encoder_count;
   interrupts();
+  return c;
 }
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Simple Single Motor with Encoder Test");
 
-  // --- Setup Motor Pins ---
+  // Motor PWM
   pinMode(MOTOR_PIN1, OUTPUT);
   pinMode(MOTOR_PIN2, OUTPUT);
+  ledcAttachChannel(MOTOR_ENABLE_PIN, PWM_FREQ, PWM_RESOLUTION, PWM_CHANNEL);
+  controlMotorPWM(0, 0);
 
-  // --- Setup PWM Channel for Enable Pin (ESP32 specific) ---
-  ledcAttachChannel(MOTOR_ENABLE_PIN,PWM_FREQ,PWM_RESOLUTION, PWM_CHANNEL); // Attach pin to channel
-  
-
-  // Ensure motor is stopped initially
-  controlMotor(0, 0);
-
-  // --- Setup Encoder Pins ---
-  pinMode(ENCODER_PINA, INPUT_PULLUP); // Use internal pull-up resistors
+  // Encoder Inputs + ISRs
+  pinMode(ENCODER_PINA, INPUT_PULLUP);
   pinMode(ENCODER_PINB, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_PINA), handleEncoderA, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_PINB), handleEncoderB, CHANGE);
 
-  // --- Initialize Encoder State ---
-  g_a_last_state = digitalRead(ENCODER_PINA); // Read initial state of Pin A
-  g_encoder_count = 0;                       // Start count from 0
+  // --- Setup PID Timer ---
 
-  // --- Attach Interrupt ---
-  // Attach the ISR function 'handleEncoder' to changes on ENCODER_PINA
-  attachInterrupt(digitalPinToInterrupt(ENCODER_PINA), handleEncoder, CHANGE);
+  // timerBegin(frequency): Set timer tick frequency. 1MHz means 1 tick = 1 microsecond.
+  g_pid_timer = timerBegin(1000000);
+
+  // timerAttachInterrupt(timer, handler): Attach the ISR function to the timer.
+  timerAttachInterrupt(g_pid_timer, &onPidTimer);  // Attaching the counter increment ISR
+
+  // timerAlarm(timer, alarm_value, repeat, count): Set alarm value, repeat mode, and count.
+  timerAlarm(g_pid_timer, TIMER_ALARM_VALUE, true, 0);  // Set alarm for periodic trigger
+
+
+  // Init state
+  g_pid_last_time_ms = millis();
+  g_pid_last_encoder_count = getEncoderCount();
+
+  Serial.println("Setup complete. Textbook dt (seconds) style.");
 }
 
 void loop() {
-  // --- Read and Print Encoder Count ---
-  static long last_encoder_count = 0;
-  long current_encoder_count = getEncoderCount(); // Use the safe getter function
-
-  // Only print if the count has changed
-  if (current_encoder_count != last_encoder_count) {
-    Serial.printf("Encoder Count: %ld\n", current_encoder_count);
-    last_encoder_count = current_encoder_count;
-  }
-
-  // --- Simple Motor Control Sequence ---
-  // Cycles through Forward, Stop, Backward, Stop states every 3 seconds
-  static unsigned long last_change_time = 0;
-  static int state = 0; // 0: Forward, 1: Stop (after FWD), 2: Backward, 3: Stop (after BWD)
-
-  if (millis() - last_change_time > 3000) { // Check if 3 seconds have passed
-    last_change_time = millis(); // Update last change time
-    state = (state + 1) % 4;     // Move to the next state (0 -> 1 -> 2 -> 3 -> 0 ...)
-
-    switch(state) {
-      case 0: // State 0: Move Forward
-        Serial.println("\n>> MOTOR FORWARD <<");
-        controlMotor(1, 255); // Direction 1 (forward), Speed 150
-        break;
-
-      case 1: // State 1: Stop
-        Serial.println("\n>> MOTOR STOPPED <<");
-        controlMotor(0, 0); // Direction 0 (stop), Speed 0
-        break;
-
-      case 2: // State 2: Move Backward
-        Serial.println("\n>> MOTOR REVERSE <<");
-        controlMotor(-1, 255); // Direction -1 (backward), Speed 150
-        break;
-
-      case 3: // State 3: Stop
-        Serial.println("\n>> MOTOR STOPPED <<");
-        controlMotor(0, 0); // Direction 0 (stop), Speed 0
-        break;
+  // — Serial command parsing (T=target, P/I/D=gains)
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.length() > 1) {
+      char t = cmd.charAt(0);
+      float v = cmd.substring(1).toFloat();
+      switch (t) {
+        case 'T':
+          g_target_speed_rpm = v;
+          e_prev = inte_prev = 0.0;
+          break;
+        case 'P': KP = v; break;
+        case 'I': KI = v; break;
+        case 'D': KD = v; break;
+      }
     }
   }
 
-  delay(10); // Small delay to prevent loop from running too fast
+  // — PID every CONTROL_LOOP_PERIOD_MS via hardware timer
+  if (g_pid_timer_count > g_pid_count_prev) {
+    g_pid_count_prev = g_pid_timer_count;
+
+    // Time delta in seconds
+    unsigned long now = millis();
+    float dt_sec = (now - g_pid_last_time_ms) / 1000.0f;
+    if (dt_sec <= 0) dt_sec = 1e-3;  // guard
+
+    // Encoder delta → revolutions
+    long enc_now = getEncoderCount();
+    long delta = enc_now - g_pid_last_encoder_count;
+    float rev = (float)delta / ENCODER_COUNTS_PER_REVOLUTION;
+
+    // RPM: rev/sec × 60
+    g_current_speed_rpm = (rev / dt_sec) * 60.0f;
+
+    // PID terms
+    e = g_target_speed_rpm - g_current_speed_rpm;
+    inte = inte_prev + e * dt_sec;
+    float dedt = (e - e_prev) / dt_sec;
+    V = KP * e + KI * inte + KD * dedt;
+
+    // Anti-windup
+    if (V > Vmax) V = Vmax;
+    else if (V < Vmin) V = Vmin;
+
+    // Apply
+    int dir = (V > 0) ? 1 : (V < 0) ? -1
+                                    : 0;
+    int pwm = constrain(int(fabs(V) / Vmax * 255.0f), 0, 255);
+    controlMotorPWM(dir, pwm);
+
+    // Debug
+    Serial.printf("P:%.2f, I:%.2f, D:%.2f, RPM:%.2f,target:%.2f,PWM:%d\n",
+                  KP,KI,KD,g_current_speed_rpm, g_target_speed_rpm, pwm);
+
+    // Save state
+    g_pid_last_time_ms = now;
+    g_pid_last_encoder_count = enc_now;
+    e_prev = e;
+    inte_prev = inte;
+  }
 }
