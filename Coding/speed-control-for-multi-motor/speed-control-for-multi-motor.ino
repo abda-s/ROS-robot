@@ -179,7 +179,7 @@ private:
       digitalWrite(_motorPin2, LOW);
       speed_pwm = 0;  // Ensure PWM is 0 when stopped
     }
-    ledcWrite(_motorEnablePin, speed_pwm);  // Use the member variable _pwmChannel
+    ledcWrite(_motorEnablePin, speed_pwm);  
   }
 
   // --- ISRs (Static members to be used with attachInterruptArg) ---
@@ -337,8 +337,8 @@ void loop() {
     motor3.updatePID(now);
     motor4.updatePID(now);
     // If you had motor2: motor2.updatePID(now);
-    Serial.printf("ZERO:0.0, target:%.2f, motor2.RPM:%.2f, motor3.RPM:%.2f, motor4.RPM:%.2f \n",
-                  motor2.getTargetSpeedRPM(), motor2.getCurrentSpeedRPM(), motor3.getCurrentSpeedRPM(), motor4.getCurrentSpeedRPM() );
+    Serial.printf("ZERO:0.0, target:%.2f, motor2.RPM:%.2f, motor3.RPM:%.2f, motor4.RPM:%.2f, millis():%d \n",
+                  motor2.getTargetSpeedRPM(), motor2.getCurrentSpeedRPM(), motor3.getCurrentSpeedRPM(), motor4.getCurrentSpeedRPM(),millis() );
     // Debug print for overall loop timing (optional)
     // static unsigned long last_debug_time = 0;
     // if (now - last_debug_time >= 1000) { // Print every second
