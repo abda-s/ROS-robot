@@ -16,7 +16,7 @@ const uint8_t ENCODER_PINB = 36;
 volatile long g_encoder_count = 0;
 
 // --- PID Variables ---
-float KP = 0.5, KI = 0.55, KD = 0.0;
+float KP = 0.5, KI = 0.58, KD = 0.0;
 float g_target_speed_rpm = 30.0;
 volatile float g_current_speed_rpm = 0.0;
 float e = 0.0, e_prev = 0.0;
@@ -108,6 +108,7 @@ void setup() {
   timerAlarm(g_pid_timer, TIMER_ALARM_VALUE, true, 0);  // Set alarm for periodic trigger
 
 
+
   // Init state
   g_pid_last_time_ms = millis();
   g_pid_last_encoder_count = getEncoderCount();
@@ -115,25 +116,42 @@ void setup() {
   Serial.println("Setup complete. Textbook dt (seconds) style.");
 }
 
-void loop() {
-  // — Serial command parsing (T=target, P/I/D=gains)
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    cmd.trim();
-    if (cmd.length() > 1) {
-      char t = cmd.charAt(0);
-      float v = cmd.substring(1).toFloat();
-      switch (t) {
-        case 'T':
-          g_target_speed_rpm = v;
-          e_prev = inte_prev = 0.0;
-          break;
-        case 'P': KP = v; break;
-        case 'I': KI = v; break;
-        case 'D': KD = v; break;
+String g_serial_buffer;
+const unsigned long SERIAL_TIMEOUT_MS = 50;
+
+void processSerial() {
+  while (Serial.available()) {
+    char c = Serial.read();  // Non-blocking read
+    Serial.println(g_serial_buffer);
+    if (c == 'E') {
+      if (g_serial_buffer.length() > 1) {
+        char t = g_serial_buffer.charAt(0);
+        float v = g_serial_buffer.substring(1).toFloat();
+        switch (t) {
+          case 'T':
+            g_target_speed_rpm = v;
+            e_prev = inte_prev = 0.0;
+            break;
+          case 'P': KP = v; break;
+          case 'I': KI = v; break;
+          case 'D': KD = v; break;
+        }
       }
+      g_serial_buffer = "";
+    } else if (isPrintable(c)) {
+      g_serial_buffer += c;
     }
   }
+  // Optional: Timeout for partial commands
+  // if (g_serial_buffer.length() > 0 &&
+  //     millis() - g_serial_last_received > SERIAL_TIMEOUT_MS) {
+  //   g_serial_buffer = "";
+  // }
+}
+
+void loop() {
+  // — Serial command parsing (T=target, P/I/D=gains)
+  processSerial();  // Non-blocking
 
   // — PID every CONTROL_LOOP_PERIOD_MS via hardware timer
   if (g_pid_timer_count > g_pid_count_prev) {
@@ -169,8 +187,8 @@ void loop() {
     controlMotorPWM(dir, pwm);
 
     // Debug
-    Serial.printf("P:%.2f, I:%.2f, D:%.4f, RPM:%.2f,target:%.2f,PWM:%d\n",
-                  KP,KI,KD,g_current_speed_rpm, g_target_speed_rpm, pwm);
+    Serial.printf("P:%.2f, I:%.2f, D:%.4f, RPM:%.2f,target:%.2f,PWM:%d, inte:%.3f\n",
+                  KP, KI, KD, g_current_speed_rpm, g_target_speed_rpm, pwm, inte);
 
     // Save state
     g_pid_last_time_ms = now;
