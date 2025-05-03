@@ -16,12 +16,7 @@ const uint8_t ENCODER_PINB = 36;
 volatile long g_encoder_count = 0;
 
 // --- PID Variables ---
-float KP = 0.5, KI = 0.55, KD = 0.0;
-float g_target_speed_rpm = 30.0;
 volatile float g_current_speed_rpm = 0.0;
-float e = 0.0, e_prev = 0.0;
-float inte = 0.0, inte_prev = 0.0;
-float V = 0.0;
 const float Vmax = 6.0, Vmin = -6.0;
 
 unsigned long g_pid_last_time_ms = 0;
@@ -112,70 +107,65 @@ void setup() {
   g_pid_last_time_ms = millis();
   g_pid_last_encoder_count = getEncoderCount();
 
-  Serial.println("Setup complete. Textbook dt (seconds) style.");
+  // Serial.println("Setup complete. Textbook dt (seconds) style.");
 }
 
 void loop() {
-  // — Serial command parsing (T=target, P/I/D=gains)
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    cmd.trim();
-    if (cmd.length() > 1) {
-      char t = cmd.charAt(0);
-      float v = cmd.substring(1).toFloat();
-      switch (t) {
-        case 'T':
-          g_target_speed_rpm = v;
-          e_prev = inte_prev = 0.0;
-          break;
-        case 'P': KP = v; break;
-        case 'I': KI = v; break;
-        case 'D': KD = v; break;
-      }
+  // --- Read raw motor command (float) from Serial ---
+  // Check if the expected number of bytes for a float is available
+  if (Serial.available() >= sizeof(float)) {
+    float V_command;
+    // Read the raw bytes directly into the float variable
+    Serial.readBytes((byte*)&V_command, sizeof(V_command));
+
+    // Convert V_command (e.g., -6.0 to 6.0) to direction and PWM (0 to 255)
+    // Ensure Vmax and Vmin are defined globally and correctly represent
+    // the voltage range you want to map to the full PWM range.
+    int dir = 0;
+    int pwm = 0;
+    if (V_command > 0) {
+        dir = 1;
+    } else if (V_command < 0) {
+        dir = -1;
     }
+
+    // Map the absolute value of V_command to the PWM range [0, 255]
+    // Using Vmax to scale the command.
+    pwm = constrain(int(fabs(V_command) / Vmax * 255.0f), 0, 255);
+
+
+    controlMotorPWM(dir, pwm);
+
+    // Optional: Print received command for debugging (will be slow, use with caution)
+    // Serial.printf("Received raw V_command: %.2f, PWM: %d\n", V_command, pwm);
   }
 
-  // — PID every CONTROL_LOOP_PERIOD_MS via hardware timer
+  // --- Speed Calculation (Keep this) ---
+  // PID Timer ISR increments g_pid_timer_count periodically
   if (g_pid_timer_count > g_pid_count_prev) {
     g_pid_count_prev = g_pid_timer_count;
 
-    // Time delta in seconds
     unsigned long now = millis();
     float dt_sec = (now - g_pid_last_time_ms) / 1000.0f;
-    if (dt_sec <= 0) dt_sec = 1e-3;  // guard
+    if (dt_sec <= 0) dt_sec = 1e-3; // guard against division by zero
 
-    // Encoder delta → revolutions
     long enc_now = getEncoderCount();
     long delta = enc_now - g_pid_last_encoder_count;
     float rev = (float)delta / ENCODER_COUNTS_PER_REVOLUTION;
 
-    // RPM: rev/sec × 60
     g_current_speed_rpm = (rev / dt_sec) * 60.0f;
 
-    // PID terms
-    e = g_target_speed_rpm - g_current_speed_rpm;
-    inte = inte_prev + e * dt_sec;
-    float dedt = (e - e_prev) / dt_sec;
-    V = KP * e + KI * inte + KD * dedt;
+    // --- Send measured speed (raw float) back to Serial ---
+    // Send the raw bytes of the g_current_speed_rpm float variable
+// Serial.write((uint8_t*)&g_current_speed_rpm, sizeof(g_current_speed_rpm));
 
-    // Anti-windup
-    if (V > Vmax) V = Vmax;
-    else if (V < Vmin) V = Vmin;
+    // Optional: Print sent data for debugging (will interfere with raw data!)
+    Serial.println(g_current_speed_rpm);
 
-    // Apply
-    int dir = (V > 0) ? 1 : (V < 0) ? -1
-                                    : 0;
-    int pwm = constrain(int(fabs(V) / Vmax * 255.0f), 0, 255);
-    controlMotorPWM(dir, pwm);
 
-    // Debug
-    Serial.printf("P:%.2f, I:%.2f, D:%.4f, RPM:%.2f,target:%.2f,PWM:%d\n",
-                  KP,KI,KD,g_current_speed_rpm, g_target_speed_rpm, pwm);
 
-    // Save state
+    // Save state for next calculation
     g_pid_last_time_ms = now;
     g_pid_last_encoder_count = enc_now;
-    e_prev = e;
-    inte_prev = inte;
   }
 }
