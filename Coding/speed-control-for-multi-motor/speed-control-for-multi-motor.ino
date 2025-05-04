@@ -1,3 +1,5 @@
+#include "BluetoothSerial.h"
+
 // Define a class to manage a single motor
 class MotorController {
 public:
@@ -182,7 +184,7 @@ private:
   // --- ISRs (Static members to be used with attachInterruptArg) ---
   // These static functions receive a pointer to the instance and call the
   // actual non-static member function.
-  static void IRAM_ATTR handleEncoderA_static(void* arg) {
+  static void ICACHE_RAM_ATTR handleEncoderA_static(void* arg) {
     // Cast the void* argument back to a MotorController pointer
     MotorController* instance = static_cast<MotorController*>(arg);
     if (instance) {
@@ -190,7 +192,7 @@ private:
     }
   }
 
-  static void IRAM_ATTR handleEncoderB_static(void* arg) {
+  static void ICACHE_RAM_ATTR handleEncoderB_static(void* arg) {
     MotorController* instance = static_cast<MotorController*>(arg);
     if (instance) {
       instance->handleEncoderB_instance();
@@ -249,6 +251,7 @@ MotorController* motors[] = { &motor1, &motor2, &motor4, &motor3 };
 const int NUM_MOTORS = sizeof(motors) / sizeof(motors[0]);
 
 // --- Serial command parsing (Global) ---
+BluetoothSerial BTSerial;
 String g_serial_buffer;
 const unsigned long SERIAL_TIMEOUT_MS = 50;  // Not used in this non-blocking example, but good to keep in mind
 
@@ -259,8 +262,9 @@ float g_target_speed = 0;
 bool g_distance_command_received = false;
 
 // Function to move all motors a specific distance (in meters) at a given speed (in m/s)
+
 void moveDistance(float distance_m, float speed_mps) {
-  const float wheelCircumference = 0.21054956;  // meters (from your notes)
+  const float wheelCircumference = 0.21054956;    // meters (from your notes)
   const float distancePerCount = 5.321746032e-5;  // meters/count (from your notes)
   static long startCounts[NUM_MOTORS];
   static long targetCounts[NUM_MOTORS];
@@ -309,9 +313,9 @@ void processDistanceCommand(const String& commandBody) {
     g_target_distance = commandBody.substring(0, commaIndex).toFloat();
     g_target_speed = commandBody.substring(commaIndex + 1).toFloat();
     g_distance_command_received = true;
-    Serial.printf("Scheduled move: %.2f m at %.2f m/s\n", g_target_distance, g_target_speed);
+    BTSerial.printf("Scheduled move: %.2f m at %.2f m/s\n", g_target_distance, g_target_speed);
   } else {
-    Serial.println("Invalid distance command format. Use: D<distance>,<speed>E");
+    BTSerial.println("Invalid distance command format. Use: D<distance>,<speed>E");
   }
 }
 
@@ -319,8 +323,13 @@ void processDistanceCommand(const String& commandBody) {
 
 // Function to process serial commands for all motors in an array
 void processSerialCommands(MotorController* motorArray[], int numMotors) {
-  while (Serial.available()) {
-    char c = Serial.read();  // Non-blocking read
+  while (BTSerial.available()) {
+    if (!BTSerial.hasClient()) {
+      // No Bluetooth device is connected
+      return;
+    }
+
+    char c = BTSerial.read();  // Non-blocking read
 
     if (c == 'E') {  // End character for a command
       if (g_serial_buffer.length() > 1) {
@@ -337,20 +346,20 @@ void processSerialCommands(MotorController* motorArray[], int numMotors) {
               for (int i = 0; i < numMotors; i++) {
                 motorArray[i]->setTargetSpeedRPM(value);
               }
-              Serial.printf("Set Target Speed for ALL motors to %.2f RPM\n", value);
+              BTSerial.printf("Set Target Speed for ALL motors to %.2f RPM\n", value);
               break;
             case 'D':
               processDistanceCommand(valueString);
               break;
             default:
-              Serial.println("Unknown command type");
+              BTSerial.println("Unknown command type");
               break;
           }
         } else {
-          Serial.println("Command received but no value provided.");
+          BTSerial.println("Command received but no value provided.");
         }
       } else {
-        Serial.println("Incomplete command received.");
+        BTSerial.println("Incomplete command received.");
       }
       g_serial_buffer = "";  // Clear buffer after processing
     } else if (isPrintable(c)) {
@@ -368,7 +377,8 @@ float distancePerCount = 5.321746032e-5;  // meters/count (from your notes)
 void setup() {
   Serial.begin(115200);
   Serial.println("Starting Motor Controller Setup...");
-
+  BTSerial.begin("NanoLoadBot");  // Replace with your Bluetooth name
+  BTSerial.println("Bluetooth Started. Waiting for commands...");
   // Initialize motor instances
   motor1.begin();
   motor2.begin();
@@ -384,7 +394,6 @@ void setup() {
 
 
   Serial.println("Setup complete.");
-
 }
 
 void loop() {
@@ -405,8 +414,8 @@ void loop() {
     // If you had motor2: motor2.updatePID(now);
     // Serial.printf("ZERO:0.0, target:%.2f, motor1.RPM:%.2f, motor2.RPM:%.2f, motor3.RPM:%.2f, motor4.RPM:%.2f, millis():%d \n",
     //               motor2.getTargetSpeedRPM(), motor1.getCurrentSpeedRPM(), motor2.getCurrentSpeedRPM(), motor3.getCurrentSpeedRPM(), motor4.getCurrentSpeedRPM(), millis());
-    
-    
+
+
     // Debug print for overall loop timing (optional)
     // static unsigned long last_debug_time = 0;
     // if (now - last_debug_time >= 1000) { // Print every second
@@ -415,8 +424,8 @@ void loop() {
     // }
   }
 
-if (g_distance_command_received) {
-  moveDistance(g_target_distance, g_target_speed);
-}
+  if (g_distance_command_received) {
+    moveDistance(g_target_distance, g_target_speed);
+  }
   // Other non-blocking tasks can go here
 }
