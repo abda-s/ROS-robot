@@ -1,6 +1,3 @@
-#include <Arduino.h>
-#include <functional>  // Required for std::function
-
 // Define a class to manage a single motor
 class MotorController {
 public:
@@ -85,8 +82,8 @@ public:
     // Apply motor command
     int dir = (_V > 0) ? 1 : (_V < 0) ? -1
                                       : 0;
-    int pwm = constrain(int(fabs(_V) / _Vmax * 255.0f), 0, 255);
-    pwm = (_g_target_speed_rpm == 0) ? 0 : pwm; // TO NOT MAKE THE MOTORS MAKE SOUNDS
+    int pwm = constrain(int(fabs(_V) / _Vmax * 255.0f),  0, 255);
+    // pwm = (_g_target_speed_rpm == 0) ? 0 : pwm;  // TO NOT MAKE THE MOTORS MAKE SOUNDS
     controlMotorPWM(dir, pwm);
 
 
@@ -179,7 +176,7 @@ private:
       digitalWrite(_motorPin2, LOW);
       speed_pwm = 0;  // Ensure PWM is 0 when stopped
     }
-    ledcWrite(_motorEnablePin, speed_pwm);  
+    ledcWrite(_motorEnablePin, speed_pwm);
   }
 
   // --- ISRs (Static members to be used with attachInterruptArg) ---
@@ -228,24 +225,27 @@ void IRAM_ATTR onPidTimer() {
 
 // --- Motor Instances ---
 // Create instances of the MotorController class for each motor you have.
-// Example: One motor
-MotorController motor2(33, 25, 32,  // Motor Pins (PIN1, PIN2, ENABLE)
+MotorController motor1(13, 12, 14,  // Motor Pins (PIN1, PIN2, ENABLE)
                        0,           // PWM Channel
+                       16, 17);     // Encoder Pins (PINA, PINB)
+
+MotorController motor2(33, 25, 32,  // Motor Pins (PIN1, PIN2, ENABLE)
+                       1,           // PWM Channel
                        39, 36);     // Encoder Pins (PINA, PINB)
 
 MotorController motor4(2, 15, 4,  // Motor Pins (PIN1, PIN2, ENABLE)
-                       1,         // PWM Channel
+                       2,         // PWM Channel
                        35, 34);   // Encoder Pins (PINA, PINB)
 
 MotorController motor3(18, 19, 5,  // Motor Pins (PIN1, PIN2, ENABLE)
-                       2,         // PWM Channel
-                       27, 26);   // Encoder Pins (PINA, PINB)
+                       3,          // PWM Channel
+                       27, 26);    // Encoder Pins (PINA, PINB)
 
 // Example: If you had a second motor, you would create another instance:
 // MotorController motor2(PIN1_M2, PIN2_M2, ENABLE_M2, 1, 30000, 8, ENCA_M2, ENCB_M2, 3960, 0.5, 0.58, 0.0);
 
 // Array of motor controllers
-MotorController* motors[] = { &motor2, &motor4, &motor3 };
+MotorController* motors[] = { &motor1, &motor2, &motor4, &motor3 };
 const int NUM_MOTORS = sizeof(motors) / sizeof(motors[0]);
 
 // --- Serial command parsing (Global) ---
@@ -296,35 +296,29 @@ void setup() {
   Serial.println("Starting Motor Controller Setup...");
 
   // Initialize motor instances
+  motor1.begin();
   motor2.begin();
   motor4.begin();
   motor3.begin();
 
-  // If you had motor2: motor2.begin();
 
   // --- Setup PID Timer ---
   // timerBegin(frequency): Set timer tick frequency. 1MHz means 1 tick = 1 microsecond.
   g_pid_timer = timerBegin(1000000);
-
-  // timerAttachInterrupt(timer, handler): Attach the ISR function to the timer.
-  // The third parameter (true) sets the interrupt to edge-triggered (not needed here, level is fine)
-  // The fourth parameter (true) enables auto-reload.
   timerAttachInterrupt(g_pid_timer, &onPidTimer);
-
-  // timerAlarm(timer, alarm_value, repeat): Set alarm value and repeat mode.
   timerAlarm(g_pid_timer, TIMER_ALARM_VALUE, true, 0);  // Set alarm for periodic trigger
 
 
   Serial.println("Setup complete.");
+
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    motors[i]->setTargetSpeedRPM(60);
+  }
 }
 
 void loop() {
   // --- Serial command parsing (T=target, P/I/D=gains) ---
-  // Need to modify this to handle commands for multiple motors if applicable.
-  // For now, it will control motor1.
   processSerialCommands(motors, NUM_MOTORS);
-  // If you had motor2 and a command format for it, you'd add:
-  // processSerialCommands(motor2); // Requires modifying processSerialCommands to handle motor ID
 
   // --- PID Update every CONTROL_LOOP_PERIOD_MS via hardware timer ---
   if (g_pid_timer_count > g_pid_count_prev) {
@@ -333,12 +327,13 @@ void loop() {
     g_pid_count_prev = g_pid_timer_count;  // Acknowledge timer tick
 
     // Update motor instances
+    motor1.updatePID(now);
     motor2.updatePID(now);
     motor3.updatePID(now);
     motor4.updatePID(now);
     // If you had motor2: motor2.updatePID(now);
-    Serial.printf("ZERO:0.0, target:%.2f, motor2.RPM:%.2f, motor3.RPM:%.2f, motor4.RPM:%.2f, millis():%d \n",
-                  motor2.getTargetSpeedRPM(), motor2.getCurrentSpeedRPM(), motor3.getCurrentSpeedRPM(), motor4.getCurrentSpeedRPM(),millis() );
+    Serial.printf("ZERO:0.0, target:%.2f, motor1.RPM:%.2f, motor2.RPM:%.2f, motor3.RPM:%.2f, motor4.RPM:%.2f, millis():%d \n",
+                  motor2.getTargetSpeedRPM(), motor1.getCurrentSpeedRPM(), motor2.getCurrentSpeedRPM(), motor3.getCurrentSpeedRPM(), motor4.getCurrentSpeedRPM(), millis());
     // Debug print for overall loop timing (optional)
     // static unsigned long last_debug_time = 0;
     // if (now - last_debug_time >= 1000) { // Print every second
